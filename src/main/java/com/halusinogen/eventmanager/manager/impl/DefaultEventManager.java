@@ -12,6 +12,7 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.logging.Logger;
 
 /**
@@ -40,7 +41,7 @@ public class DefaultEventManager implements EventManager{
         classAndThreadMapping = new ConcurrentHashMap<>();
 
         new Thread(classifierRunnable,"BIG QUEUE").start();
-        LOGGER.info("BIG QUEUE is started");
+        LOGGER.fine("BIG QUEUE is started");
         
     }
     
@@ -63,21 +64,23 @@ public class DefaultEventManager implements EventManager{
         }
         if(!classAndHandlerMapping.containsKey(event)){
 
-            classAndHandlerMapping.put(event, new HashSet<>());
+            Set s = Collections.newSetFromMap(new ConcurrentHashMap<Object,Boolean>());
+
+            classAndHandlerMapping.put(event, s);
         }
-        LOGGER.info("Registering a " + event.getName() + " event handler : hashcode : " + handler);
+        LOGGER.fine("Registering a " + event.getName() + " event handler : hashcode : " + handler);
         classAndHandlerMapping.get(event).add(handler);
     }
 
     @Override
     public <T extends Event> void unregister(EventHandler<T> handler) {
-        LOGGER.info("Unregister a "+handler.getClass().getName()+" event handler : hashcode "+handler.hashCode());
+        LOGGER.fine("Unregister a " + handler.getClass().getName() + " event handler : hashcode " + handler.hashCode());
         stillValidHandlers.remove(handler);
     }
 
     @Override
     public void publish(Event event) {
-        LOGGER.info("Publishing a "+event.getClass().getName()+" event. hashcode : "+event);
+        LOGGER.fine("Publishing a " + event.getClass().getName() + " event. hashcode : " + event);
 
         if(Event.class.equals(event.getClass()))throw new IllegalArgumentException("Can't publish event of type Event. Must use subclass of Event");
 
@@ -103,14 +106,14 @@ public class DefaultEventManager implements EventManager{
 
                 // bigQueue still empty, move on
                 if(headEvent==null){
-                    LOGGER.info("bigQueue still empty, move on");
+                    LOGGER.fine("bigQueue still empty, move on");
                     continue;
                 }
                 final Class<? extends Event> headEventClass = headEvent.getClass();
 
                 // No listener registered for this event, move on.
                 if(!classAndHandlerMapping.containsKey(headEventClass)){
-                    LOGGER.info("No listener registered for "+headEventClass.getName()+" event, move on.");
+                    LOGGER.fine("No listener registered for " + headEventClass.getName() + " event, move on.");
                     continue;
                 }
 
@@ -119,11 +122,11 @@ public class DefaultEventManager implements EventManager{
                     classAndLittleQueueMapping.put(headEventClass, new ConcurrentLinkedQueue<>());
                 }
                 classAndLittleQueueMapping.get(headEventClass).add(headEvent);
-                LOGGER.info("Good candidate :  "+headEventClass.getName()+" : "+headEvent.hashCode());
+                LOGGER.fine("Good candidate :  " + headEventClass.getName() + " : " + headEvent.hashCode());
 
                 if(!classAndThreadMapping.containsKey(headEventClass) || classAndThreadMapping.get(headEventClass).getState().compareTo(Thread.State.TERMINATED)==0){
                     // Make a thread for that event class if it does not exist OR is terminated
-                    LOGGER.info("Make a thread because "+headEventClass.getName()+" class does not exist OR is terminated");
+                    LOGGER.fine("Make a thread because " + headEventClass.getName() + " class does not exist OR is terminated");
                     Thread dispatcher = new Thread(new Runnable() {
                         private final Logger LOGGER = Logger.getLogger("dispatcher");
                         @Override
@@ -131,18 +134,20 @@ public class DefaultEventManager implements EventManager{
 
                             //For every events,..
                             Queue<Event> q = classAndLittleQueueMapping.get(headEventClass);
-                            LOGGER.info("Got a queue of Event with size of "+q.size());
+                            LOGGER.fine("Got a queue of Event with size of " + q.size());
                             do {
                                 final Event event = q.poll();
                                 // ...dispatch that event to every handler
-                                LOGGER.info("Gonna dispatch "+event.getClass().getName()+" to every handler very soon...");
+                                LOGGER.fine("Gonna dispatch " + event.getClass().getName() + " to every handler very soon...");
                                 classAndHandlerMapping
                                         .get(headEventClass)
                                         .parallelStream()
                                         .forEach(
                                                 (handler) -> {
-                                                    LOGGER.info("Dispatching "+event.getClass().getName()+" to  "+handler.getClass().getName()+" handler. : "+handler.hashCode());
-                                                    handler.handleEvent(event);
+                                                    LOGGER.fine("Dispatching " + event.getClass().getName() + " to  " + handler.getClass().getName() + " handler. : " + handler.hashCode());
+                                                    try {
+                                                        handler.handleEvent(event);
+                                                    }catch (Throwable t){}
                                                 }
                                         );
                                 try {
